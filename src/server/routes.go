@@ -59,9 +59,17 @@ func (s *Server) handler() http.Handler {
 	return r
 }
 
+func (s *Server) getSettings() map[string]interface{} {
+	if s.public {
+		return storage.SettingsDefaults()
+	}
+
+	return s.db.GetSettings()
+}
+
 func (s *Server) handleIndex(c *router.Context) {
 	c.HTML(http.StatusOK, assets.Template("index.html"), map[string]interface{}{
-		"settings":      s.db.GetSettings(),
+		"settings":      s.getSettings(),
 		"authenticated": s.Username != "" && s.Password != "",
 	})
 }
@@ -77,9 +85,20 @@ func (s *Server) handleStatic(c *router.Context) {
 }
 
 func (s *Server) handleStatus(c *router.Context) {
+	stats := s.db.FeedStats()
+	running := int32(0)
+
+	if s.public {
+		for i := range stats {
+			stats[i].UnreadCount = 0
+		}
+	} else {
+		running = s.worker.FeedsPending()
+	}
+
 	c.JSON(http.StatusOK, map[string]interface{}{
-		"running": s.worker.FeedsPending(),
-		"stats":   s.db.FeedStats(),
+		"running": running,
+		"stats":   stats,
 	})
 }
 
@@ -87,7 +106,7 @@ func (s *Server) handleFolderList(c *router.Context) {
 	if c.Req.Method == "GET" {
 		list := s.db.ListFolders()
 		c.JSON(http.StatusOK, list)
-	} else if c.Req.Method == "POST" {
+	} else if c.Req.Method == "POST" && !s.public {
 		var body FolderCreateForm
 		if err := json.NewDecoder(c.Req.Body).Decode(&body); err != nil {
 			log.Print(err)
@@ -111,7 +130,7 @@ func (s *Server) handleFolder(c *router.Context) {
 		c.Out.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if c.Req.Method == "PUT" {
+	if c.Req.Method == "PUT" && !s.public {
 		var body FolderUpdateForm
 		if err := json.NewDecoder(c.Req.Body).Decode(&body); err != nil {
 			log.Print(err)
@@ -125,14 +144,16 @@ func (s *Server) handleFolder(c *router.Context) {
 			s.db.ToggleFolderExpanded(id, *body.IsExpanded)
 		}
 		c.Out.WriteHeader(http.StatusOK)
-	} else if c.Req.Method == "DELETE" {
+	} else if c.Req.Method == "DELETE" && !s.public {
 		s.db.DeleteFolder(id)
 		c.Out.WriteHeader(http.StatusNoContent)
+	} else {
+		c.Out.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
 func (s *Server) handleFeedRefresh(c *router.Context) {
-	if c.Req.Method == "POST" {
+	if c.Req.Method == "POST" && !s.public {
 		s.worker.RefreshFeeds()
 		c.Out.WriteHeader(http.StatusOK)
 	} else {
@@ -198,7 +219,7 @@ func (s *Server) handleFeedList(c *router.Context) {
 	if c.Req.Method == "GET" {
 		list := s.db.ListFeeds()
 		c.JSON(http.StatusOK, list)
-	} else if c.Req.Method == "POST" {
+	} else if c.Req.Method == "POST" && !s.public {
 		var form FeedCreateForm
 		if err := json.NewDecoder(c.Req.Body).Decode(&form); err != nil {
 			log.Print(err)
@@ -235,6 +256,8 @@ func (s *Server) handleFeedList(c *router.Context) {
 		default:
 			c.JSON(http.StatusOK, map[string]string{"status": "notfound"})
 		}
+	} else {
+		c.Out.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
@@ -244,7 +267,7 @@ func (s *Server) handleFeed(c *router.Context) {
 		c.Out.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if c.Req.Method == "PUT" {
+	if c.Req.Method == "PUT" && !s.public {
 		feed := s.db.GetFeed(id)
 		if feed == nil {
 			c.Out.WriteHeader(http.StatusBadRequest)
@@ -270,7 +293,7 @@ func (s *Server) handleFeed(c *router.Context) {
 			}
 		}
 		c.Out.WriteHeader(http.StatusOK)
-	} else if c.Req.Method == "DELETE" {
+	} else if c.Req.Method == "DELETE" && !s.public {
 		s.db.DeleteFeed(id)
 		c.Out.WriteHeader(http.StatusNoContent)
 	} else {
@@ -291,9 +314,12 @@ func (s *Server) handleItem(c *router.Context) {
 			return
 		}
 		item.Content = sanitizer.Sanitize(item.Link, item.Content)
+		if s.public {
+			item.Status = storage.READ
+		}
 
 		c.JSON(http.StatusOK, item)
-	} else if c.Req.Method == "PUT" {
+	} else if c.Req.Method == "PUT" && !s.public {
 		var body ItemUpdateForm
 		if err := json.NewDecoder(c.Req.Body).Decode(&body); err != nil {
 			log.Print(err)
@@ -326,7 +352,9 @@ func (s *Server) handleItemList(c *router.Context) {
 		}
 		if status := query.Get("status"); len(status) != 0 {
 			statusValue := storage.StatusValues[status]
-			filter.Status = &statusValue
+			if statusValue != storage.UNREAD || !s.public {
+				filter.Status = &statusValue
+			}
 		}
 		if search := query.Get("search"); len(search) != 0 {
 			filter.Search = &search
@@ -339,11 +367,18 @@ func (s *Server) handleItemList(c *router.Context) {
 			hasMore = true
 			items = items[:perPage]
 		}
+
+		if s.public {
+			for i := range items {
+				items[i].Status = storage.READ
+			}
+		}
+
 		c.JSON(http.StatusOK, map[string]interface{}{
 			"list":     items,
 			"has_more": hasMore,
 		})
-	} else if c.Req.Method == "PUT" {
+	} else if c.Req.Method == "PUT" && !s.public {
 		filter := storage.MarkFilter{}
 
 		if folderID, err := c.QueryInt64("folder_id"); err == nil {
@@ -361,8 +396,8 @@ func (s *Server) handleItemList(c *router.Context) {
 
 func (s *Server) handleSettings(c *router.Context) {
 	if c.Req.Method == "GET" {
-		c.JSON(http.StatusOK, s.db.GetSettings())
-	} else if c.Req.Method == "PUT" {
+		c.JSON(http.StatusOK, s.getSettings())
+	} else if c.Req.Method == "PUT" && !s.public {
 		settings := make(map[string]interface{})
 		if err := json.NewDecoder(c.Req.Body).Decode(&settings); err != nil {
 			c.Out.WriteHeader(http.StatusBadRequest)
@@ -376,11 +411,13 @@ func (s *Server) handleSettings(c *router.Context) {
 		} else {
 			c.Out.WriteHeader(http.StatusBadRequest)
 		}
+	} else {
+		c.Out.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
 func (s *Server) handleOPMLImport(c *router.Context) {
-	if c.Req.Method == "POST" {
+	if c.Req.Method == "POST" && !s.public {
 		file, _, err := c.Req.FormFile("opml")
 		if err != nil {
 			log.Print(err)
@@ -450,15 +487,17 @@ func (s *Server) handleOPMLExport(c *router.Context) {
 		}
 
 		c.Out.Write([]byte(doc.OPML()))
+	} else {
+		c.Out.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
 func (s *Server) handlePageCrawl(c *router.Context) {
 	url := c.Req.URL.Query().Get("url")
 
-    if newUrl := silo.RedirectURL(url); newUrl != "" {
-        url = newUrl
-    }
+	if newUrl := silo.RedirectURL(url); newUrl != "" {
+		url = newUrl
+	}
 	if content := silo.VideoIFrame(url); content != "" {
 		c.JSON(http.StatusOK, map[string]string{
 			"content": sanitizer.Sanitize(url, content),

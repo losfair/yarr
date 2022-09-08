@@ -24,15 +24,22 @@ type Server struct {
 	// https
 	CertFile string
 	KeyFile  string
+	public   bool
 }
 
-func NewServer(db *storage.Storage, addr string) *Server {
+func NewServer(db *storage.Storage, addr string, public bool) *Server {
+	var w *worker.Worker
+	if !public {
+		w = worker.NewWorker(db)
+	}
+
 	return &Server{
 		db:          db,
 		Addr:        addr,
-		worker:      worker.NewWorker(db),
+		worker:      w,
 		cache:       make(map[string]interface{}),
 		cache_mutex: &sync.Mutex{},
+		public:      public,
 	}
 }
 
@@ -45,12 +52,16 @@ func (h *Server) GetAddr() string {
 }
 
 func (s *Server) Start() {
-	refreshRate := s.db.GetSettingsValueInt64("refresh_rate")
-	s.worker.FindFavicons()
-	s.worker.StartFeedCleaner()
-	s.worker.SetRefreshRate(refreshRate)
-	if refreshRate > 0 {
-		s.worker.RefreshFeeds()
+	if !s.public {
+		refreshRate := s.db.GetSettingsValueInt64("refresh_rate")
+		s.worker.FindFavicons()
+		s.worker.StartFeedCleaner()
+		s.worker.SetRefreshRate(refreshRate)
+		if refreshRate > 0 {
+			s.worker.RefreshFeeds()
+		}
+	} else {
+		log.Println("running in public mode")
 	}
 
 	httpserver := &http.Server{Addr: s.Addr, Handler: s.handler()}

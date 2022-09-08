@@ -5,7 +5,7 @@ import (
 	"log"
 )
 
-func settingsDefaults() map[string]interface{} {
+func SettingsDefaults() map[string]interface{} {
 	return map[string]interface{}{
 		"filter":            "",
 		"feed":              "",
@@ -22,7 +22,7 @@ func settingsDefaults() map[string]interface{} {
 func (s *Storage) GetSettingsValue(key string) interface{} {
 	row := s.db.QueryRow(`select val from settings where key=?`, key)
 	if row == nil {
-		return settingsDefaults()[key]
+		return SettingsDefaults()[key]
 	}
 	var val []byte
 	row.Scan(&val)
@@ -48,7 +48,7 @@ func (s *Storage) GetSettingsValueInt64(key string) int64 {
 }
 
 func (s *Storage) GetSettings() map[string]interface{} {
-	result := settingsDefaults()
+	result := SettingsDefaults()
 	rows, err := s.db.Query(`select key, val from settings;`)
 	if err != nil {
 		log.Print(err)
@@ -70,7 +70,7 @@ func (s *Storage) GetSettings() map[string]interface{} {
 }
 
 func (s *Storage) UpdateSettings(kv map[string]interface{}) bool {
-	defaults := settingsDefaults()
+	defaults := SettingsDefaults()
 	for key, val := range kv {
 		if defaults[key] == nil {
 			continue
