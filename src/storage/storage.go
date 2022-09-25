@@ -3,6 +3,9 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/mattn/go-sqlite3"
@@ -19,8 +22,17 @@ func New(path string) (*Storage, error) {
 		return nil, err
 	}
 
-	db.SetMaxIdleConns(5)
-	db.SetMaxOpenConns(5)
+	maxConnStr := os.Getenv("YARR_MAX_DB_CONNS")
+	if maxConnStr == "" {
+		maxConnStr = "10"
+	}
+	maxConn, err := strconv.Atoi(maxConnStr)
+	if err != nil {
+		return nil, errors.New("YARR_MAX_DB_CONNS must be an integer")
+	}
+
+	db.SetMaxIdleConns(maxConn)
+	db.SetMaxOpenConns(maxConn)
 
 	if err = migrate(db); err != nil {
 		return nil, err
