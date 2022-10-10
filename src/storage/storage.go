@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mattn/go-sqlite3"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 type Storage struct {
@@ -61,19 +60,6 @@ func (s *Storage) OptimisticTx(f func(tx *sql.Tx) error) error {
 		}
 		return err
 	}
-}
-
-func (s *Storage) OptimisticExec(query string, args ...interface{}) (sql.Result, error) {
-	var res sql.Result
-	err := s.OptimisticTx(func(tx *sql.Tx) error {
-		var err error
-		res, err = tx.Exec(query, args...)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return res, nil
 }
 
 func init() {

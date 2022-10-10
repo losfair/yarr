@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -70,40 +71,34 @@ type MarkFilter struct {
 }
 
 func (s *Storage) CreateItems(items []Item) bool {
-	tx, err := s.db.Begin()
+	now := time.Now()
+
+	err := s.OptimisticTx(func(tx *sql.Tx) error {
+		for _, item := range items {
+			_, err := tx.Exec(`
+				insert into items (
+					guid, feed_id, title, link, date,
+					content, image, podcast_url,
+					date_arrived, status
+				)
+				values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				on conflict (feed_id, guid) do nothing`,
+				item.GUID, item.FeedId, item.Title, item.Link, item.Date,
+				item.Content, item.ImageURL, item.AudioURL,
+				now, UNREAD,
+			)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
 	if err != nil {
 		log.Print(err)
 		return false
 	}
 
-	now := time.Now()
-
-	for _, item := range items {
-		_, err = tx.Exec(`
-			insert into items (
-				guid, feed_id, title, link, date,
-				content, image, podcast_url,
-				date_arrived, status
-			)
-			values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			on conflict (feed_id, guid) do nothing`,
-			item.GUID, item.FeedId, item.Title, item.Link, item.Date,
-			item.Content, item.ImageURL, item.AudioURL,
-			now, UNREAD,
-		)
-		if err != nil {
-			log.Print(err)
-			if err = tx.Rollback(); err != nil {
-				log.Print(err)
-				return false
-			}
-			return false
-		}
-	}
-	if err = tx.Commit(); err != nil {
-		log.Print(err)
-		return false
-	}
 	return true
 }
 
